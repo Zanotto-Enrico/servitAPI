@@ -39,11 +39,8 @@ colors.enabled = true;
 
 
 import mongoose = require('mongoose');
-import {Order} from './dbSchema/order';
 import * as order from './dbSchema/order';
-import {Drink} from './dbSchema/drink';
 import * as drink from './dbSchema/drink';
-import {Course} from './dbSchema/course';
 import * as course from './dbSchema/course';
 
 
@@ -103,14 +100,14 @@ var server = http.createServer( function( req, res ) {
             var filter = {};
             if(id)
                 filter = { _id: id };
-            handleGetRequest(respond, order, req, filter)
+            handleGetRequest(respond, order.getModel(), req, filter)
         }
         else if( drinkRegex.test(req.url) && req.method === "GET" ) {
             const id = req.url.match(drinkRegex)[1];
             var filter = {};
             if(id)
                 filter = { _id: id };
-            handleGetRequest(respond, drink, req, filter)
+            handleGetRequest(respond, drink.getModel(), req, filter)
         }
         else if(courseRegex.test(req.url)  && req.method === "GET") {
             const id = req.url.match(courseRegex)[1];
@@ -118,7 +115,7 @@ var server = http.createServer( function( req, res ) {
             var filter = {};
             if(id)
                 filter = { _id: id };
-            handleGetRequest(respond, course, req, filter)
+            handleGetRequest(respond, course.getModel(), req, filter)
         }
         else if(orderStausRegex.test(req.url)  && req.method === "GET") {
             const id = req.url.match(courseRegex)[1];
@@ -126,16 +123,16 @@ var server = http.createServer( function( req, res ) {
             var filter = {};
             if(id)
                 filter = { _id: id };
-            return { status: handleGetRequest(respond, course, req, filter)['state']}
+            return { status: handleGetRequest(respond, course.getModel(), req, filter)['state']}
         }
         else if( courseRegex.test(req.url) && req.method === "POST" ) {
-            return handlePostRequest(respond, course.isCourse, course, body)
+            return handlePostRequest(respond, course.isCourse, course.getModel(), body)
         }
         else if( drinkRegex.test(req.url) && req.method === "POST" ) {
-            return handlePostRequest(respond, drink.isDrink, drink, body)
+            return handlePostRequest(respond, drink.isDrink, drink.getModel(), body)
         }
         else if( orderRegex.test(req.url) && req.method === "POST") {
-            return handlePostRequest(respond, order.isOrder, order, body)
+            return handlePostRequest(respond, order.isOrder, order.getModel(), body)
         }
         else if( orderStausRegex.test(req.url)  && req.method === "PUT" ) {
             const id = req.url.match(orderRegex)[1];
@@ -147,7 +144,6 @@ var server = http.createServer( function( req, res ) {
                 if (err) {
                     return respond(404, { error: true, errormessage: "Error finding the order" });
                 } else {
-                    // Modifica il campo desiderato
                     document.state = recvedData['status'];
                     document.save(function(err, documentoModificato) {
                     if (err) {
@@ -162,17 +158,17 @@ var server = http.createServer( function( req, res ) {
         else if (drinkRegex.test(req.url) && req.method === "DELETE") {
             const drinkIdMatch = req.url.match(drinkRegex);
             const id = drinkIdMatch && drinkIdMatch.length > 1 ? drinkIdMatch[1] : null;
-            handleDeleteRequest(respond, drink, req, id)
+            handleDeleteRequest(respond, drink.getModel(), req, id)
         }
         else if (orderRegex.test(req.url) && req.method === "DELETE") {
             const orderIdMatch = req.url.match(orderRegex);
             const id = orderIdMatch && orderIdMatch.length > 1 ? orderIdMatch[1] : null;
-            handleDeleteRequest(respond, order, req, id)
+            handleDeleteRequest(respond, order.getModel(), req, id)
         }
         else if (courseRegex.test(req.url) && req.method === "DELETE") {
             const courseIdMatch = req.url.match(courseRegex);
             const id = courseIdMatch && courseIdMatch.length > 1 ? courseIdMatch[1] : null;
-            handleDeleteRequest(respond, course, req, id)
+            handleDeleteRequest(respond, course.getModel(), req, id)
         }
         else {
             return respond(404, { error: true, errormessage: "Invalid endpoint/method" });
@@ -182,7 +178,7 @@ var server = http.createServer( function( req, res ) {
 
 });
 
-function handleGetRequest(respond: (status_code: number, response_data: Object) => void, model, req, idFilter ){
+function handleGetRequest(respond: (status_code: number, response_data: Object) => void, model :  mongoose.Model< mongoose.Document > , req, idFilter ){
     var query = url.parse( req.url, true ).query;
     console.log(" Query: ".red + JSON.stringify(query));
 
@@ -195,7 +191,7 @@ function handleGetRequest(respond: (status_code: number, response_data: Object) 
     const skip = parseInt( <string>(query.skip || "0") ) || 0;
     const limit = parseInt( <string>(query.limit || "20") ) || 20;
 
-    model.getModel().find( {...idFilter , ...queryFilter} ).skip( skip ).limit( limit )
+    model.find( {...idFilter , ...queryFilter} ).skip( skip ).limit( limit )
     .then( (documents) => {
         return respond( 200, documents );
     }).catch( (reason) => {
@@ -204,7 +200,7 @@ function handleGetRequest(respond: (status_code: number, response_data: Object) 
 }
 
 
-function handlePostRequest(respond: (status_code: number, response_data: Object) => void,  dataCheckFunction: (data) => boolean, model, body ): void {
+function handlePostRequest(respond: (status_code: number, response_data: Object) => void,  dataCheckFunction: (data) => boolean, model :  mongoose.Model< mongoose.Document > , body ): void {
     console.log("Received: " + body);
 
     try {
@@ -212,7 +208,7 @@ function handlePostRequest(respond: (status_code: number, response_data: Object)
 
         if( dataCheckFunction( recvedData ) ) {
 
-            model.getModel().create( recvedData ).then( ( data ) => {
+            model.create( recvedData ).then( ( data ) => {
                 respond(200,  { error: false, errormessage: "", id: data._id } );
             }).catch((reason) => {
                 console.log("1");
@@ -229,12 +225,12 @@ function handlePostRequest(respond: (status_code: number, response_data: Object)
     }
 }
   
-function handleDeleteRequest(respond: (status_code: number, response_data: Object) => void, model , req, id ){
+function handleDeleteRequest(respond: (status_code: number, response_data: Object) => void, model :  mongoose.Model< mongoose.Document > , req, id ){
     var query = url.parse( req.url, true ).query;
     console.log(" Query: ".red + JSON.stringify(query));
 
     
-    model.getModel().findByIdAndDelete(id)
+    model.findByIdAndDelete(id)
     .then( (documents) => {
         return respond( 200, documents );
     }).catch( (reason) => {
