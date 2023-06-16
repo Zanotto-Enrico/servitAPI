@@ -24,8 +24,8 @@ const drinkSchema = new mongoose.Schema({
         type: mongoose.SchemaTypes.Number,
         required: true
     },
-    size: {
-        type: mongoose.SchemaTypes.String,
+    sizes: {
+        type: [mongoose.SchemaTypes.String],
         required: true
     }
 });

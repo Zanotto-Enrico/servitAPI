@@ -27,12 +27,14 @@
  *                          ?skip=n
  *                          ?limit=m
  * 
- *     /waiters             -                   POST        Post a new waiter
- *     /waiters/:id         -                   DELETE      Delete a waiter by id
  *     /waiters/(:id)       -                   GET         Returns all the waiters or filters by id 
- *                          ?table=                             filtered by the table 
+ *                          ?table=                             waiters filtered by the assigned table 
  *                          ?skip=n
  *                          ?limit=m
+ * 
+ *     /waiters/:id/tables/:tableNumber         PUT         To add a table to the waiter control
+ *     /waiters/:id/tables/:tableNumber         DELETE      To remove a table from the waiter 
+ * 
  * 
  *     /orders/:id/status   -                   PUT         Update the status of a given order
  *     /orders/:id/status   -                   GET         Returns the status of a given order
@@ -47,152 +49,243 @@ import fs = require('fs');                    // filesystem module
 import colors = require('colors');
 colors.enabled = true;
 
+const result = require('dotenv').config()
+
+if (result.error) {
+  console.log("Unable to load \".env\" file. Please provide one to store the JWT secret key");
+  process.exit(-1);
+}
+if( !process.env.JWT_SECRET ) {
+  console.log("\".env\" file loaded but JWT_SECRET=<secret> key-value pair was not found");
+  process.exit(-1);
+}
 
 import mongoose = require('mongoose');
 import * as order from './dbSchema/order';
 import * as drink from './dbSchema/drink';
 import * as dish from './dbSchema/dish';
-import * as waiter from './dbSchema/waiter';
+import * as user from './dbSchema/user';
 
+import express = require('express');
 
+import passport = require('passport');           // authentication middleware for Express
+import passportHTTP = require('passport-http');  // implements Basic and Digest authentication for HTTP (used for /login endpoint)
 
-var server = http.createServer( function( req, res ) {
+import jsonwebtoken = require('jsonwebtoken');  // JWT generation
+const { expressjwt: jwt } = require('express-jwt');            // JWT parsing middleware for express
 
-    // This function will be invoked asynchronously for every incoming connection
+import cors = require('cors');                  // Enable CORS middleware
+const io = require('socket.io');               // Socket.io websocket library
 
-    console.log("New connection".inverse);
-    console.log(" REQUEST: ")
-    console.log("     URL: ".red + req.url );
-    console.log("  METHOD: ".red + req.method );
-    console.log(" Headers: ".red + JSON.stringify( req.headers ) );
+// adding custom type definition to the Express types. 
+declare global {
+  namespace Express {
+      interface User {
+        mail:string,
+        username: string,
+        role: string,
+        id: string
+        assignedTables: [string]
+      }
 
-    var body: string = "";
+      interface Request {
+        auth: {
+          username: string;
+        }
+      }
+    }
+}
 
-    req.on("data", function( chunk ) {
-        body = body + chunk;
+let ios = undefined;
+let app = express();
 
-    }).on("end", function() {
-        console.log("Request end");
+// generating the JWT authentication middleware
+// provided by the express-jwt library.  
+let auth = jwt( {
+                  secret: process.env.JWT_SECRET, 
+                  algorithms: ["HS256"]
+                } );
 
-        var respond = function( status_code: number, response_data: Object ) : void {
-            res.writeHead(status_code, { "Content-Type": "application/json" });
-            res.write(JSON.stringify(response_data), "utf-8");
-            res.end();
-        }
+app.use( cors() );
 
-        var path = url.parse(req.url, true).pathname;
-    
-        // Defining the regex matching every endpoint
-        const orderRegex = /^\/orders\/?(\w+)?\/?\??.*$/;
-        const orderStausRegex = /^\/orders\/(\w+)\/status?\/?\??.*$/;
-        const drinkRegex = /^\/drinks\/?(\w+)?\/?\??.*$/;
-        const dishRegex = /^\/dishes\/?(\w+)?\/?\??.*$/;
-        const waiterRegex = /^\/waiters\/?(\w+)?\/?\??.*$/;
-    
+// body-parser extracts the entire body portion of an incoming request stream 
+// and exposes it on req.body
+app.use( express.json( ) );
+app.use( (req,res,next) => {
+  console.log("------------------------------------------------".inverse)
+  console.log("New request for: "+req.url );
+  console.log("Method: "+req.method);
+  next();
+})
 
-        if( path === "/" && req.method === "GET") {
-            return respond(200, { api_version: "1.0", endpoints: [ "/orders", "/drinks", "/dishes", "/waiters" ] });
-        }
-        else if(orderStausRegex.test(req.url)  && req.method === "GET") {
-            const id = req.url.match(orderStausRegex)[1];
-            console.log( req.url.match(orderStausRegex))
-            var filter = {};
-            if(id)
-                filter = { _id: id };
-                order.getModel().find( filter ).select("status")
-                .then( (documents) => {
-                    return respond( 200, documents );
-                }).catch( (reason) => {
-                    return respond(404, { error: true, errormessage: "DB error:" + reason });
-                })
-        }
-        else if( orderRegex.test(req.url)  && req.method === "GET" ) {
-            const id = req.url.match(orderRegex)[1];
-            var filter = {};
-            if(id)
-                filter = { _id: id };
-            handleGetRequest(respond, order.getModel(), req, filter)
-        }
-        else if( drinkRegex.test(req.url) && req.method === "GET" ) {
-            const id = req.url.match(drinkRegex)[1];
-            var filter = {};
-            if(id)
-                filter = { _id: id };
-            handleGetRequest(respond, drink.getModel(), req, filter)
-        }
-        else if(dishRegex.test(req.url)  && req.method === "GET") {
-            const id = req.url.match(dishRegex)[1];
-            console.log( req.url.match(dishRegex))
-            var filter = {};
-            if(id)
-                filter = { _id: id };
-            handleGetRequest(respond, dish.getModel(), req, filter)
-        }
-        else if(waiterRegex.test(req.url)  && req.method === "GET") {
-            const id = req.url.match(waiterRegex)[1];
-            console.log( req.url.match(waiterRegex))
-            var filter = {};
-            if(id)
-                filter = { _id: id };
-            handleGetRequest(respond, waiter.getModel(), req, filter)
-        }
-        else if( dishRegex.test(req.url) && req.method === "POST" ) {
-            return handlePostRequest(respond, dish.isDish, dish.getModel(), body)
-        }
-        else if( drinkRegex.test(req.url) && req.method === "POST" ) {
-            return handlePostRequest(respond, drink.isDrink, drink.getModel(), body)
-        }
-        else if( orderRegex.test(req.url) && req.method === "POST") {
-            return handlePostRequest(respond, order.isOrder, order.getModel(), body)
-        }
-        else if( waiterRegex.test(req.url) && req.method === "POST") {
-            return handlePostRequest(respond, waiter.isWaiter, waiter.getModel(), body)
-        }
-        else if( orderStausRegex.test(req.url)  && req.method === "PUT" ) {
-            const id = req.url.match(orderRegex)[1];
-            var filter = {};
-            if(id)
-                filter = { _id: id };
-            var recvedData = JSON.parse(body);
-            order.getModel().findById(id, function(err, document) {
-                if (err) {
-                    return respond(404, { error: true, errormessage: "Error finding the order" });
-                } else {
-                    document.status = recvedData['status'];
-                    document.save(function(err, documentoModificato) {
-                    if (err) {
-                        return respond(404, { error: true, errormessage: "Error updating order status" });
-                    } else {
-                        return respond( 200, "Order updated" );
-                    }
-                    });
-                }
-                });
-        }
-        else if (drinkRegex.test(req.url) && req.method === "DELETE") {
-            const drinkIdMatch = req.url.match(drinkRegex);
-            const id = drinkIdMatch && drinkIdMatch.length > 1 ? drinkIdMatch[1] : null;
-            handleDeleteRequest(respond, drink.getModel(), req, id)
-        }
-        else if (orderRegex.test(req.url) && req.method === "DELETE") {
-            const orderIdMatch = req.url.match(orderRegex);
-            const id = orderIdMatch && orderIdMatch.length > 1 ? orderIdMatch[1] : null;
-            handleDeleteRequest(respond, order.getModel(), req, id)
-        }
-        else if (dishRegex.test(req.url) && req.method === "DELETE") {
-            const dishIdMatch = req.url.match(dishRegex);
-            const id = dishIdMatch && dishIdMatch.length > 1 ? dishIdMatch[1] : null;
-            handleDeleteRequest(respond, dish.getModel(), req, id)
-        }
-        else {
-            return respond(404, { error: true, errormessage: "Invalid endpoint/method" });
-        }
+app.get("/", (req,res) => {
+    res.status(200).json( { api_version: "1.0", endpoints: [ "/orders", "/drinks", "/dishes", "/waiters" ] } ); 
+});
+app.route("/orders").get( auth, (req,res,next) => {
+    handleGetRequest(res, next, req, order.getModel(), {})
+}).post( auth, (req,res,next) => {
+    return handlePostRequest(res, next, req, order.isOrder, order.getModel())
+});
+app.route("/drinks").get( auth, (req,res,next) => {
+    handleGetRequest(res, next, req, drink.getModel(), {})
+}).post( auth, (req,res,next) => {
+    return handlePostRequest(res, next, req, drink.isDrink, drink.getModel())
+});
+app.route("/dishes").get( auth, (req,res,next) => {
+    handleGetRequest(res, next, req, dish.getModel(), {})
+}).post( auth, (req,res,next) => {
+    return handlePostRequest(res, next, req, dish.isDish, dish.getModel())
+});
+app.route("/waiters").get( auth, (req,res,next) => {
+    handleGetRequest(res, next, req, user.getModel(), {role : "WAITER"})
+});
+app.post('/users', (req,res,next) => {
 
-    });
+    let u = user.newUser( req.body );
+    if( !req.body.password ) {
+      return next({ statusCode:404, error: true, errormessage: "Password field missing"} );
+    }
+    u.setPassword( req.body.password );
+    console.log(u)
+
+    u.save().then( (data) => {
+      return res.status(200).json({ error: false, errormessage: "", id: data._id });
+    }).catch( (reason) => {
+      if( reason.code === 11000 )
+        return next({statusCode:404, error:true, errormessage: "User already exists"} );
+      return next({ statusCode:404, error: true, errormessage: "DB error: "+reason.errmsg });
+    })
 
 });
 
-function handleGetRequest(respond: (status_code: number, response_data: Object) => void, model :  mongoose.Model< mongoose.Document > , req, filter ){
+app.route("/dishes/:dishid").get( auth, (req,res,next) => {
+    return handleGetRequest(res, next, req, dish.getModel(),  { _id: mongoose.Types.ObjectId(req.params.dishid) })
+});
+app.route("/drinks/:drinkid").get( auth, (req,res,next) => {
+    return handleGetRequest(res, next, req, drink.getModel(), { _id: mongoose.Types.ObjectId(req.params.drinkid) })
+});
+app.route("/orders/:orderid").get( auth, (req,res,next) => {
+    return handleGetRequest(res, next, req, order.getModel(), { _id: mongoose.Types.ObjectId(req.params.orderid) })
+});
+app.route("/waiters/:waiterid").get( auth, (req,res,next) => {
+    return handleGetRequest(res, next, req, user.getModel(),  { _id: mongoose.Types.ObjectId(req.params.waiterid) })
+})
+
+app.delete( '/dishes/:dishid', auth, (req,res,next) => {
+    return handleDeleteRequest(res, next, req, dish.getModel(), req.params.dishid)
+});
+app.delete( '/drinks/:drinkid', auth, (req,res,next) => {
+    return handleDeleteRequest(res, next, req, drink.getModel(), req.params.drinkid)
+});
+app.delete( '/orders/:orderid', auth, (req,res,next) => {
+    return handleDeleteRequest(res, next, req, order.getModel(), req.params.orderid)
+});
+app.delete( '/waiters/:waiterid/tables/:tableNumber', auth, (req,res,next) => {
+    //var recvedData = JSON.parse(res.body);
+    user.getModel().findById(mongoose.Types.ObjectId(req.params.waiterid ), function(err, document) {
+        if (err) {
+            return next({ statusCode:404, error: true, errormessage: "Error finding the waiter"});
+        } else {
+            const index = document.assignedTables.indexOf(req.params.tableNumber);
+            if (index !== -1) {
+                document.assignedTables.splice(index, 1);
+            }
+            document.save(function(err) {
+            if (err) {
+                return next({ statusCode:404, error: true, errormessage: "Error removing the table from waiter list"});
+            } else {
+                return res.status(200).json( {error:false, errormessage:""} );
+            }
+            });
+        }
+    });
+});
+
+app.route('/orders/:orderid/status').get( auth, (req,res,next) => {
+    handleGetRequest(res, next, req, order.getModel(), {_id : mongoose.Types.ObjectId(req.params.orderid )})
+}).put( auth, (req,res,next) => {
+
+    var recvedData = JSON.parse(res.body);
+    order.getModel().findById(mongoose.Types.ObjectId(req.params.orderid ), function(err, document) {
+        if (err) {
+            return next({ statusCode:404, error: true, errormessage: "Error finding the order"});
+        } else {
+            document.status = recvedData['status'];
+            document.save(function(err) {
+            if (err) {
+                return next({ statusCode:404, error: true, errormessage: "Error updating order status"});
+            } else {
+                return res.status(200).json( {error:false, errormessage:""} );
+            }
+            });
+        }
+    });
+})
+
+app.route('/waiters/:waiterid/tables/:tableNumber').put( auth, (req,res,next) => {
+    console.log("ciaoo" + req.params.waiterid )
+    //var recvedData = JSON.parse(res.body);
+    user.getModel().findById(mongoose.Types.ObjectId(req.params.waiterid ), function(err, document) {
+        console.log("ciaoo")
+        if (err) {
+            return next({ statusCode:404, error: true, errormessage: "Error finding the waiter"});
+        } else {
+            console.log("ciaoo")
+            if (!document.assignedTables.includes(req.params.tableNumber))
+                document.assignedTables.push(req.params.tableNumber);
+            console.log("ciaoo")
+            document.save(function(err) {
+            if (err) {
+                console.log("eroor1")
+                return next({ statusCode:404, error: true, errormessage: "Error adding table to waiter"});
+            } else {
+                console.log("error2")
+                return res.status(200).json( {error:false, errormessage:""} );
+            }
+            });
+        }
+    });
+})
+
+// Login endpoint uses passport middleware to check
+// user credentials before generating a new JWT
+app.get("/login", passport.authenticate('basic', { session: false }), (req,res,next) => {
+
+    // generating a JWT with the useful user data
+    // and return it as response
+  
+    let tokendata = {
+      username: req.user.username,
+      role: req.user.role,
+      mail: req.user.mail,
+      id: req.user.id,
+      assignedTables: req.user.assignedTables
+    };
+  
+    console.log("Login granted. Generating token" );
+    let token_signed = jsonwebtoken.sign(tokendata, process.env.JWT_SECRET, { expiresIn: '1h' } );
+  
+    return res.status(200).json({ error: false, errormessage: "", token: token_signed });
+  
+  });
+  
+  
+  // Add error handling middleware
+  app.use( function(err,req,res,next) {
+  
+    console.log("Request error: ".red + JSON.stringify(err) );
+    res.status( err.statusCode || 500 ).json( err );
+  
+  });
+  
+
+  app.use( (req,res,next) => {
+    res.status(404).json({statusCode:404, error:true, errormessage: "Invalid endpoint"} );
+  })
+
+
+
+function handleGetRequest(res , next, req ,model , filter ){
     var query = url.parse( req.url, true ).query;
     console.log(" Query: ".red + JSON.stringify(query));
 
@@ -205,7 +298,7 @@ function handleGetRequest(respond: (status_code: number, response_data: Object) 
         filter = { table: query.table , ...filter};
     if( query.status && model.collection.name == order.getModel().collection.name) 
         filter = { status: query.status, ...filter };
-    if( query.table && model.collection.name == waiter.getModel().collection.name) 
+    if( query.table && model.collection.name == user.getModel().collection.name) 
         filter = { assignedTables: { $in: [query.table] } , ...filter };
     
     console.log(" Filter: ".red + JSON.stringify(filter) );
@@ -215,49 +308,76 @@ function handleGetRequest(respond: (status_code: number, response_data: Object) 
 
     model.find( filter).skip( skip ).limit( limit )
     .then( (documents) => {
-        return respond( 200, documents );
+        return res.status(200).json( documents );
     }).catch( (reason) => {
-        return respond(404, { error: true, errormessage: "DB error:" + reason });
+        next({ statusCode:404, error: true, errormessage: "DB error: "+reason });
     })
 }
 
 
-function handlePostRequest(respond: (status_code: number, response_data: Object) => void,  dataCheckFunction: (data) => boolean, model :  mongoose.Model< mongoose.Document > , body ): void {
-    console.log("Received: " + body);
+function handlePostRequest(res , next, req ,  dataCheckFunction: (data) => boolean, model  ): void {
+    console.log("Received: " + req.body);
 
-    try {
-        var recvedData = JSON.parse(body);
+    var recvedData = req.body;
 
-        if( dataCheckFunction( recvedData ) ) {
+    if( dataCheckFunction( recvedData ) ) {
 
-            model.create( recvedData ).then( ( data ) => {
-                respond(200,  { error: false, errormessage: "", id: data._id } );
-            }).catch((reason) => {
-                console.log("1");
-                return respond(404, { error: true, errormessage: "DB error"+reason });
-            } )
-        } else {
+        model.create( recvedData ).then( ( data ) => {
+            return res.status(200).json({ error: false, errormessage: "", id: data._id });
+        }).catch((reason) => {
             console.log("1");
-            return respond(404, { error: true, errormessage: "Data is not a valid Message" });
-        }
-    } catch( e ) {
+            return next({ statusCode:404, error: true, errormessage: "DB error: "+reason });
+        } )
+    } else {
         console.log("1");
-        return respond(404, { error: true, errormessage: "JSON parse failed" });
+        return next({ statusCode:404, error: true, errormessage: "Data is not a valid Message" });
     }
 }
   
-function handleDeleteRequest(respond: (status_code: number, response_data: Object) => void, model :  mongoose.Model< mongoose.Document > , req, id ){
+function handleDeleteRequest(res , next, req , model :  mongoose.Model< mongoose.Document > , id){
     var query = url.parse( req.url, true ).query;
+    console.log("Delete request for " + model.collection.name + " id: "+req.params.messageid )
     console.log(" Query: ".red + JSON.stringify(query));
 
-    
-    model.findByIdAndDelete(id)
-    .then( (documents) => {
-        return respond( 200, documents );
-    }).catch( (reason) => {
-        return respond(404, { error: true, errormessage: "DB error:" + reason });
-    })
+    model.deleteOne( {_id: mongoose.Types.ObjectId(id) } ).then( 
+        ( q )=> {
+          if( q.deletedCount > 0 )
+            return res.status(200).json( {error:false, errormessage:""} );
+          else 
+            return res.status(404).json( {error:true, errormessage:"Invalid message ID"} );
+      }).catch( (reason)=> {
+          return next({ statusCode:404, error: true, errormessage: "DB error: "+reason });
+      })
 }
+
+// HTTP basic authentication strategy 
+// trough passport middleware.
+passport.use( new passportHTTP.BasicStrategy(
+    function(username, password, done) {
+  
+      // "done" callback (verify callback) documentation:  http://www.passportjs.org/docs/configure/
+  
+      // Delegate function we provide to passport middleware
+      // to verify user credentials 
+  
+        console.log("New login attempt from ".green + username );
+        user.getModel().findOne( {username: username} , (err, user)=>{
+        if( err ) {
+          return done( {statusCode: 500, error: true, errormessage:err} );
+        }
+  
+        if( !user ) {
+          return done(null,false,{statusCode: 500, error: true, errormessage:"Invalid user"});
+        }
+  
+        if( user.validatePassword( password ) ) {
+          return done(null, user);
+        }
+  
+        return done(null,false,{statusCode: 500, error: true, errormessage:"Invalid password"});
+      })
+    }
+  ));
 
 console.log("Starting the application)");
 mongoose.connect( 'mongodb://localhost:27017/servit' )
@@ -292,13 +412,13 @@ mongoose.connect( 'mongodb://localhost:27017/servit' )
                 name: "Coca cola",
                 description: "Coca cola fredda",
                 price: 2,
-                size: "Medium"
+                sizes: ["Big","Medium","Small"]
             })
             var drink2 = drink.getModel().create({
-                name: "Coca cola",
+                name: "Sprite",
                 description: "Coca cola fredda",
                 price: 3,
-                size: "Big"
+                sizes: ["Medium"]
             })
             var order1 = order.getModel().create({
                 dishes: [],
@@ -308,10 +428,13 @@ mongoose.connect( 'mongodb://localhost:27017/servit' )
                 table: 4
             })
 
-            var waiter1 = waiter.getModel().create({
+            /*var waiter1 = user.getModel().create({
                 assignedTables: [12,14,22,33],
-                name: "Alfredo Mescaldo",
-            })
+                mail: "jonny@jonny.com",
+                username: "jonny",
+                password: "password",
+                role: "WAITER",
+            })*/
 
             return Promise.all([dish1, dish2, drink1, drink2, order1]);
         }
@@ -323,18 +446,26 @@ mongoose.connect( 'mongodb://localhost:27017/servit' )
     }
 ).then(
     () => {
-
-        // We can manually create a Promise for APIs that
-        // normally accept a callback function
-
-        return new Promise( (resolve, reject) => {
-            server.listen(8080, function () {
-                console.log("HTTP Server started on port 8080");
-                resolve(0);
-            });
-            server.on('error', (e) => { reject(e); } );
+        let server = http.createServer(app);
+    
+        ios = io(server)
+        ios.on('connection', function (client) {
+          console.log("Socket.io client connected".green);
         });
-    }
+    
+        server.listen(8080, () => console.log("HTTP Server started on port 8080".green));
+    
+          // To start an HTTPS server we create an https.Server instance 
+          // passing the express application middleware. Then, we start listening
+          // on port 8443
+          //
+        /*
+        https.createServer({
+          key: fs.readFileSync('keys/key.pem'),
+          cert: fs.readFileSync('keys/cert.pem')
+        }, app).listen(8443);
+        */
+      }
 )
 .catch( 
     (reason) => {
