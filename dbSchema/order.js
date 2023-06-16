@@ -4,16 +4,16 @@ exports.getModel = exports.getSchema = exports.isOrder = void 0;
 const mongoose = require("mongoose");
 // checks if the supplied parameter is compatible with a given type
 function isOrder(arg) {
-    return arg && arg.courses && Array.isArray(arg.courses)
+    return arg && arg.dishs && Array.isArray(arg.dishs)
         && arg.drinks && Array.isArray(arg.drinks)
-        && arg.state && typeof arg.state === 'string'
+        && arg.status && typeof arg.status === 'string'
         && arg.orderTime && arg.orderTime instanceof Date
         && arg.table && arg.table instanceof Number;
 }
 exports.isOrder = isOrder;
 // Mongoose Schema of the Order interface 
 const orderSchema = new mongoose.Schema({
-    courses: {
+    dishs: {
         type: [mongoose.SchemaTypes.String],
         required: true
     },
@@ -21,7 +21,7 @@ const orderSchema = new mongoose.Schema({
         type: [mongoose.SchemaTypes.String],
         required: true
     },
-    state: {
+    status: {
         type: mongoose.SchemaTypes.String,
         required: true
     },

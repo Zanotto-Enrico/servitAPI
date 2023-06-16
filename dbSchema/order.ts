@@ -1,13 +1,13 @@
 
 import mongoose = require('mongoose');
-import { Course } from './course.js';
+import { Dish } from './dish.js';
 import { Drink } from './drink.js';
 
-// An order contains info about drinks, courses and table number
+// An order contains info about drinks, dishs and table number
 export interface Order {
-    courses: Course[],
+    dishs: Dish[],
     dirnks: Drink[],
-    state: string,
+    status: string,
     orderTime: Date,
     table: number
 }
@@ -15,9 +15,9 @@ export interface Order {
 
 // checks if the supplied parameter is compatible with a given type
 export function isOrder(arg: any): arg is Order {
-    return arg && arg.courses && Array.isArray(arg.courses) 
+    return arg && arg.dishs && Array.isArray(arg.dishs) 
                && arg.drinks && Array.isArray(arg.drinks)
-               && arg.state && typeof arg.state === 'string'
+               && arg.status && typeof arg.status === 'string'
                && arg.orderTime && arg.orderTime instanceof Date
                && arg.table && arg.table instanceof Number;
 }
@@ -25,7 +25,7 @@ export function isOrder(arg: any): arg is Order {
 
 // Mongoose Schema of the Order interface 
 const orderSchema = new mongoose.Schema( {
-    courses: {
+    dishs: {
         type: [mongoose.SchemaTypes.String],
         required: true
     },
@@ -33,7 +33,7 @@ const orderSchema = new mongoose.Schema( {
         type: [mongoose.SchemaTypes.String],
         required: true
     },
-    state:  {
+    status:  {
         type: mongoose.SchemaTypes.String,
         required: true 
     },
