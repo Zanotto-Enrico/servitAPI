@@ -75,6 +75,7 @@ let auth = jwt({
     secret: process.env.JWT_SECRET,
     algorithms: ["HS256"]
 });
+// enabling the cross origin requests from my frontend
 app.use(cors());
 // body-parser extracts the entire body portion of an incoming request stream 
 // and exposes it on req.body
@@ -114,6 +115,7 @@ app.post('/users', (req, res, next) => {
     u.setPassword(req.body.password);
     console.log(u);
     u.save().then((data) => {
+        ios.emit('broadcast', data);
         return res.status(200).json({ error: false, errormessage: "", id: data._id });
     }).catch((reason) => {
         if (reason.code === 11000)
@@ -158,6 +160,7 @@ app.delete('/waiters/:waiterid/tables/:tableNumber', auth, (req, res, next) => {
                     return next({ statusCode: 404, error: true, errormessage: "Error removing the table from waiter list" });
                 }
                 else {
+                    ios.emit('broadcast', "");
                     return res.status(200).json({ error: false, errormessage: "" });
                 }
             });
@@ -167,13 +170,14 @@ app.delete('/waiters/:waiterid/tables/:tableNumber', auth, (req, res, next) => {
 app.route('/orders/:orderid/status').get(auth, (req, res, next) => {
     handleGetRequest(res, next, req, order.getModel(), { _id: mongoose.Types.ObjectId(req.params.orderid) });
 }).put(auth, (req, res, next) => {
-    var recvedData = JSON.parse(res.body);
+    var recvedData = req.body;
     order.getModel().findById(mongoose.Types.ObjectId(req.params.orderid), function (err, document) {
         if (err) {
             return next({ statusCode: 404, error: true, errormessage: "Error finding the order" });
         }
         else {
             document.status = recvedData['status'];
+            console.log(recvedData['status']);
             document.save(function (err) {
                 if (err) {
                     return next({ statusCode: 404, error: true, errormessage: "Error updating order status" });
@@ -186,28 +190,33 @@ app.route('/orders/:orderid/status').get(auth, (req, res, next) => {
     });
 });
 app.route('/waiters/:waiterid/tables/:tableNumber').put(auth, (req, res, next) => {
-    console.log("ciaoo" + req.params.waiterid);
     //var recvedData = JSON.parse(res.body);
     user.getModel().findById(mongoose.Types.ObjectId(req.params.waiterid), function (err, document) {
-        console.log("ciaoo");
         if (err) {
             return next({ statusCode: 404, error: true, errormessage: "Error finding the waiter" });
         }
         else {
-            console.log("ciaoo");
-            if (!document.assignedTables.includes(req.params.tableNumber))
-                document.assignedTables.push(req.params.tableNumber);
-            console.log("ciaoo");
-            document.save(function (err) {
-                if (err) {
-                    console.log("eroor1");
-                    return next({ statusCode: 404, error: true, errormessage: "Error adding table to waiter" });
-                }
-                else {
-                    console.log("error2");
-                    return res.status(200).json({ error: false, errormessage: "" });
-                }
-            });
+            if (!document.assignedTables.includes(req.params.tableNumber)) {
+                user.getModel().exists({ assignedTables: req.params.tableNumber }, (err, result) => {
+                    if (err) {
+                        console.error('Errore durante la query:', err);
+                        return;
+                    }
+                    if (!result)
+                        document.assignedTables.push(req.params.tableNumber);
+                    else
+                        return next({ statusCode: 404, error: true, errormessage: "Table of another waiter" });
+                    document.save(function (err) {
+                        if (err) {
+                            return next({ statusCode: 404, error: true, errormessage: "Error adding table to waiter" });
+                        }
+                        else {
+                            ios.emit('broadcast', "");
+                            return res.status(200).json({ error: false, errormessage: "" });
+                        }
+                    });
+                });
+            }
         }
     });
 });
@@ -262,16 +271,20 @@ function handlePostRequest(res, next, req, dataCheckFunction, model) {
     console.log("Received: " + req.body);
     var recvedData = req.body;
     if (dataCheckFunction(recvedData)) {
-        model.create(recvedData).then((data) => {
-            return res.status(200).json({ error: false, errormessage: "", id: data._id });
-        }).catch((reason) => {
-            console.log("1");
-            return next({ statusCode: 404, error: true, errormessage: "DB error: " + reason });
-        });
+        if (model.collection.name == order.getModel().collection.name)
+            /*if( !user.newUser(req.auth).assignedTables.includes(recvedData.table)){
+                console.log(recvedData.table)
+                console.log(user.newUser(req.auth).assignedTables)
+                return next({ statusCode:404, error: true, errormessage: "table of the order not assigned to current waiter"});}*/
+            model.create(recvedData).then((data) => {
+                ios.emit('broadcast', data);
+                return res.status(200).json({ error: false, errormessage: "", id: data._id });
+            }).catch((reason) => {
+                return next({ statusCode: 404, error: true, errormessage: "DB error: " + reason });
+            });
     }
     else {
-        console.log("1");
-        return next({ statusCode: 404, error: true, errormessage: "Data is not a valid Message" });
+        return next({ statusCode: 404, error: true, errormessage: "Data is not a valid " + model.collection.name });
     }
 }
 function handleDeleteRequest(res, next, req, model, id) {
@@ -279,19 +292,20 @@ function handleDeleteRequest(res, next, req, model, id) {
     console.log("Delete request for " + model.collection.name + " id: " + req.params.messageid);
     console.log(" Query: ".red + JSON.stringify(query));
     model.deleteOne({ _id: mongoose.Types.ObjectId(id) }).then((q) => {
-        if (q.deletedCount > 0)
+        if (q.deletedCount > 0) {
+            ios.emit('broadcast', q);
             return res.status(200).json({ error: false, errormessage: "" });
+        }
         else
-            return res.status(404).json({ error: true, errormessage: "Invalid message ID" });
+            return res.status(404).json({ error: true, errormessage: "Invalid ID" });
     }).catch((reason) => {
         return next({ statusCode: 404, error: true, errormessage: "DB error: " + reason });
     });
 }
-// HTTP basic authentication strategy 
+// HTTP basic authentication 
 // trough passport middleware.
 passport.use(new passportHTTP.BasicStrategy(function (username, password, done) {
-    // "done" callback (verify callback) documentation:  http://www.passportjs.org/docs/configure/
-    // Delegate function we provide to passport middleware
+    // passport middleware
     // to verify user credentials 
     console.log("New login attempt from ".green + username);
     user.getModel().findOne({ username: username }, (err, user) => {
@@ -311,7 +325,7 @@ console.log("Starting the application)");
 mongoose.connect('mongodb://localhost:27017/servit')
     .then(() => {
     console.log("Connected to MongoDB");
-    return drink.getModel().countDocuments({}); // We explicitly return a promise-like object here
+    return drink.getModel().countDocuments({});
 }).then((count) => {
     console.log("Collection contains " + count + " orders");
     if (count == 0) {
@@ -343,11 +357,20 @@ mongoose.connect('mongodb://localhost:27017/servit')
             sizes: ["Medium"]
         });
         var order1 = order.getModel().create({
-            dishes: [],
-            drinks: [],
-            status: "waiting",
-            orderTime: "2020-04-19 14:13:00",
+            status: "PREPARING",
+            table: 12
+        });
+        var order1 = order.getModel().create({
+            status: "READY",
+            table: 9
+        });
+        var order1 = order.getModel().create({
+            status: "IN-QUEUE",
             table: 4
+        });
+        var order1 = order.getModel().create({
+            status: "SERVED",
+            table: 6
         });
         /*var waiter1 = user.getModel().create({
             assignedTables: [12,14,22,33],
@@ -376,7 +399,7 @@ mongoose.connect('mongodb://localhost:27017/servit')
     https.createServer({
       key: fs.readFileSync('keys/key.pem'),
       cert: fs.readFileSync('keys/cert.pem')
-    }, app).listen(8443);
+    }, app).listen(8443, () => console.log("HTTP Server started on port 8443".green));
     */
 })
     .catch((reason) => {

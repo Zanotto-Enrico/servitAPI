@@ -7,7 +7,7 @@ export interface Drink {
     name: string,
     description: string,
     price: number,
-    sizes: string
+    sizes: string[]
 }
 
 
